@@ -1,9 +1,0 @@
-services:
-  calibre-web:
-    image: ghcr.io/scottdkey/calibre-web:latest
-    container_name: calibre-web
-    restart: unless-stopped
-    ports:
-      - "8083:8083"
-    volumes:
-      - /opt/calibre-web/config:/config
