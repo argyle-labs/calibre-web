@@ -2,6 +2,10 @@
 name = "calibre-web"
 version = "0.1.0"
 edition = "2021"
+description = "Ebook web library/reader — orca service-backend"
+
+[package.metadata.orca]
+category = "media"
 
 [lib]
 name = "calibre_web"
