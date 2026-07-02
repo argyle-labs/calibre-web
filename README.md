@@ -14,7 +14,7 @@ This repo is **self-contained** — the steps below run calibre-web **by hand, w
 
 ## Run it without orca
 
-### Docker / Podman
+### Docker Compose
 
 ```yaml
 # compose.yml
@@ -34,7 +34,27 @@ services:
 docker compose up -d
 ```
 
-Podman: the same file with `podman-compose up -d`.
+### Other runtimes
+
+**Podman** — the compose above works with `podman compose up -d`, or run it directly:
+
+```sh
+podman run -d --name calibre-web --restart unless-stopped \
+    -p 8083:8083/tcp \
+    -v ./config:/config \
+    -v /path/to/books:/books \
+    lscr.io/linuxserver/calibre-web:latest
+```
+
+**LXC** — on a container-capable LXC (e.g. a Proxmox LXC with nesting enabled) run the same image via Docker/Podman as above, or install calibre-web from upstream directly on the guest: <https://github.com/janeczku/calibre-web>.
+
+**VM** — install calibre-web from upstream (<https://github.com/janeczku/calibre-web>) or run the same container image inside the VM; expose port `8083`.
+
+**Unraid** — add via *Community Applications*, or *Docker → Add Container* with image `lscr.io/linuxserver/calibre-web:latest`, port `8083`, and the volume paths above.
+
+### Dependencies
+
+Requires an existing Calibre library (`metadata.db`) on the mounted books volume.
 
 ### Ports & data
 
