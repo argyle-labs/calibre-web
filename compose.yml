@@ -1,0 +1,22 @@
+# Calibre-Web - E-book Library
+# docs: ../../docs/services/calibre-web.md
+
+services:
+  calibre-web:
+    container_name: calibre-web
+    image: lscr.io/linuxserver/calibre-web:${CALIBRE_WEB_IMAGE_TAG:-latest}
+    environment:
+      - TZ=${TZ:-America/Denver}
+      - DOCKER_MODS=linuxserver/mods:universal-calibre
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8083"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 180s
+    ports:
+      - "${CALIBRE_PORT:-8083}:8083"
+    volumes:
+      - ${CALIBRE_CONFIG_PATH:-/opt/appdata/calibre-web}:/config
+      - ${MEDIA_PATH:-/mnt/pool/data/media}/books:/books
+    restart: unless-stopped
