@@ -11,8 +11,6 @@ use plugin_toolkit::service::{
     WorkloadSpec,
 };
 
-mod abi_export;
-
 /// calibre-web backend. Holds only the provider name; per-instance endpoint/creds
 /// come from the `Endpoint` the generic `service.*` tools hand each op.
 #[derive(Debug, Clone)]
