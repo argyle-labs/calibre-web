@@ -4,7 +4,7 @@
 
 # calibre-web
 
-Calibre-Web is a web app for browsing, reading, and downloading ebooks from a Calibre library.
+Ebook web library/reader, powered by [**Calibre-Web-Automated** (CWA)](https://github.com/crocodilestick/calibre-web-automated) — calibre-web plus an auto-ingest folder that converts, de-DRMs (via installed Calibre plugins), and imports dropped files automatically.
 
 A first-party [orca](https://github.com/argyle-labs/orca) plugin (service-backend).
 
@@ -20,19 +20,30 @@ This repo is **self-contained** — the steps below run calibre-web **by hand, w
 # compose.yml
 services:
   calibre-web:
-    image: lscr.io/linuxserver/calibre-web:latest
+    image: crocodilestick/calibre-web-automated:latest
     container_name: calibre-web
     restart: unless-stopped
     ports:
       - "8083:8083/tcp"   # web UI
     volumes:
-      - ./config:/config
-      - /path/to/books:/books
+      - ./config:/config                 # config + persisted Calibre plugins
+      - /path/to/books:/calibre-library  # existing Calibre library (metadata.db)
+      - /path/to/ingest:/cwa-book-ingest # drop files here → auto-imported
 ```
 
 ```sh
 docker compose up -d
 ```
+
+### Auto-ingest & de-DRM
+
+Anything dropped in `/cwa-book-ingest` is auto-converted and imported. To strip DRM on import, install the Calibre **DeDRM** / **Obok** plugins into the config volume so they persist across recreation:
+
+```
+<config>/.config/calibre/plugins/
+```
+
+CWA runs them automatically during ingest. Note: modern Kindle "Lassen"/KFX DRM is **not** removable by current public DeDRM — see [calibre-web.md](docs/calibre-web.md).
 
 ### Other runtimes
 
@@ -42,26 +53,27 @@ docker compose up -d
 podman run -d --name calibre-web --restart unless-stopped \
     -p 8083:8083/tcp \
     -v ./config:/config \
-    -v /path/to/books:/books \
-    lscr.io/linuxserver/calibre-web:latest
+    -v /path/to/books:/calibre-library \
+    -v /path/to/ingest:/cwa-book-ingest \
+    crocodilestick/calibre-web-automated:latest
 ```
 
 **LXC** — on a container-capable LXC (e.g. a Proxmox LXC with nesting enabled) run the same image via Docker/Podman as above, or install calibre-web from upstream directly on the guest: <https://github.com/janeczku/calibre-web>.
 
 **VM** — install calibre-web from upstream (<https://github.com/janeczku/calibre-web>) or run the same container image inside the VM; expose port `8083`.
 
-**Unraid** — add via *Community Applications*, or *Docker → Add Container* with image `lscr.io/linuxserver/calibre-web:latest`, port `8083`, and the volume paths above.
+**Unraid** — add via *Docker → Add Container* with image `crocodilestick/calibre-web-automated:latest`, port `8083`, and the volume paths above.
 
 ### Dependencies
 
-Requires an existing Calibre library (`metadata.db`) on the mounted books volume.
+Requires an existing Calibre library (`metadata.db`) on the mounted `/calibre-library` volume. CWA creates one on first run if absent.
 
 ### Ports & data
 
 | | |
 |---|---|
 | Default port | `8083` |
-| Upstream | <https://github.com/janeczku/calibre-web> |
+| Upstream | <https://github.com/crocodilestick/calibre-web-automated> |
 | Operator notes | [calibre-web.md](docs/calibre-web.md) |
 
 

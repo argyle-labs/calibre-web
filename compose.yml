@@ -1,13 +1,19 @@
-# Calibre-Web - E-book Library
-# docs: ../../docs/services/calibre-web.md
+# Calibre-Web-Automated (CWA) - E-book Library with auto-ingest + de-DRM
+# docs: docs/calibre-web.md
+#
+# CWA is a drop-in successor to plain calibre-web: it watches an ingest folder
+# (/cwa-book-ingest), auto-converts + imports what lands there, and runs any
+# installed Calibre plugins (DeDRM/Obok) during ingest. Calibre binaries ship
+# in the image, so no universal-calibre DOCKER_MODS is needed.
 
 services:
   calibre-web:
     container_name: calibre-web
-    image: lscr.io/linuxserver/calibre-web:${CALIBRE_WEB_IMAGE_TAG:-latest}
+    image: crocodilestick/calibre-web-automated:${CALIBRE_WEB_IMAGE_TAG:-latest}
     environment:
       - TZ=${TZ:-America/Denver}
-      - DOCKER_MODS=linuxserver/mods:universal-calibre
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8083"]
       interval: 30s
@@ -17,6 +23,11 @@ services:
     ports:
       - "${CALIBRE_PORT:-8083}:8083"
     volumes:
+      # Config + persisted Calibre plugins (DeDRM/Obok live under
+      # <config>/.config/calibre/plugins/ so they survive recreation).
       - ${CALIBRE_CONFIG_PATH:-/opt/appdata/calibre-web}:/config
-      - ${MEDIA_PATH:-/mnt/pool/data/media}/books:/books
+      # Existing Calibre library (holds metadata.db).
+      - ${MEDIA_PATH:-/mnt/pool/data/media}/books:/calibre-library
+      # Auto-ingest drop folder: files here are converted, de-DRM'd, imported.
+      - ${MEDIA_PATH:-/mnt/pool/data/media}/book-ingest:/cwa-book-ingest
     restart: unless-stopped
