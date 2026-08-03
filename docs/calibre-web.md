@@ -1,41 +1,52 @@
-# Calibre-Web
+# Calibre-Web operator notes
 
-E-book library with Calibre integration.
+Standalone operator notes for running calibre-web from this repo by hand.
+These reflect the [`compose.yml`](../compose.yml) shipped here.
 
-- **Host**: <host> (<ip>)
-- **Port**: 8083 (configurable via `CALIBRE_PORT`)
-- **Image**: `lscr.io/linuxserver/calibre-web`
-- **Compose**: [compose/calibre-web/](../../compose/calibre-web/docker-compose.yml)
+- **Image**: `lscr.io/linuxserver/calibre-web` (tag via `CALIBRE_WEB_IMAGE_TAG`, default `latest`)
+- **Web UI port**: `8083` in the container (host port via `CALIBRE_PORT`, default `8083`)
+- **Upstream**: <https://github.com/janeczku/calibre-web>
 
 ## Deploy
 
 ```bash
-cd compose/calibre-web
 docker compose up -d
 ```
 
-> Note: `DOCKER_MODS=linuxserver/mods:universal-calibre` is set automatically — it installs Calibre and takes 2-3 minutes on first start.
+> `DOCKER_MODS=linuxserver/mods:universal-calibre` is set in `compose.yml`. It
+> installs the full Calibre toolchain on first start and can take 2-3 minutes,
+> so the container may report unhealthy briefly (the healthcheck allows a
+> 180s start period).
 
-## Environment Variables
+## Environment variables
 
-| Variable                | Default          | Description                |
-| ----------------------- | ---------------- | -------------------------- |
-| `TZ`                    | `Etc/UTC` | Timezone                   |
-| `CALIBRE_WEB_IMAGE_TAG` | `latest`         | Image tag                  |
-| `CALIBRE_CONFIG_PATH`   | `./config`       | Config directory           |
-| `CALIBRE_PORT`          | `8083`           | Host port                  |
-| `MEDIA_PATH`            | *(required)*     | Base path — books subdir is mounted |
+These are the variables read by `compose.yml`, with the defaults it sets:
 
-## Initial Setup
+| Variable                | Default                       | Description                                     |
+| ----------------------- | ----------------------------- | ----------------------------------------------- |
+| `TZ`                    | `America/Denver`              | Container timezone                              |
+| `CALIBRE_WEB_IMAGE_TAG` | `latest`                      | Image tag                                       |
+| `CALIBRE_PORT`          | `8083`                        | Host port mapped to container port `8083`       |
+| `CALIBRE_CONFIG_PATH`   | `/opt/appdata/calibre-web`    | Host path mounted at `/config`                  |
+| `MEDIA_PATH`            | `/mnt/pool/data/media`        | Base media path; its `books` subdir mounts at `/books` |
 
-The `DOCKER_MODS=linuxserver/mods:universal-calibre` mod installs the full Calibre CLI inside the container. On first deploy, create the library metadata before starting calibre-web:
+Override any of these in your environment (or an `.env` file next to
+`compose.yml`) to suit your host.
+
+## Initial setup
+
+The `universal-calibre` mod installs the Calibre CLI inside the container. To
+initialize an empty library at `/books` before first use:
 
 ```bash
-# Run once to initialize an empty Calibre library at /books
 docker exec calibre-web calibredb add --empty --with-library /books
 ```
 
-Then in the calibre-web UI, set the library path to `/books` and log in with default credentials (`admin` / `admin123`). Change the password immediately.
+Then in the calibre-web UI, set the library path to `/books`.
+
+On first run calibre-web creates a default administrator account with the
+username `admin` and password `admin123`. This is a well-known default and must
+be changed immediately after logging in for the first time.
 
 ## Troubleshooting
 
@@ -43,4 +54,5 @@ Then in the calibre-web UI, set the library path to `/books` and log in with def
 docker compose logs calibre-web
 ```
 
-First start is slow due to DOCKER_MODS installation — wait 2-3 minutes before checking logs for errors.
+First start is slow because of the `DOCKER_MODS` install — wait 2-3 minutes
+before treating startup log noise as an error.

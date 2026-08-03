@@ -4,7 +4,7 @@
 
 # calibre-web
 
-Calibre-Web is a web app for browsing, reading, and downloading ebooks from a Calibre library.
+Calibre-Web is a web app for browsing, reading, and managing ebooks from a Calibre library.
 
 A first-party [orca](https://github.com/argyle-labs/orca) plugin (service-backend).
 
