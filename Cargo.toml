@@ -18,6 +18,8 @@ path = "src/main.rs"
 
 [dependencies]
 plugin-toolkit = { git = "https://github.com/argyle-labs/orca", branch = "main", package = "orca-plugin-toolkit", default-features = false, features = ["tools", "db", "delegated-http"] }
+base64 = "0.22"
+roxmltree = "0.20"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt"] }
