@@ -45,7 +45,9 @@ pub struct RefreshReport {
 
 /// Reload the Calibre library after metadata.db changed underneath
 /// calibre-web (`GET /reconnect`). Needs calibre-web started with `-r` or
-/// `CALIBRE_RECONNECT=1`.
+/// `CALIBRE_RECONNECT=1`, which opens an unauthenticated, CSRF-free route:
+/// enable it only behind the LAN/Caddy boundary, or block `/reconnect` at the
+/// proxy except for orca.
 #[orca_tool(
     domain = "calibre-web",
     verb = "library.refresh",

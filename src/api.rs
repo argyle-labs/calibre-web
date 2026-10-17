@@ -37,7 +37,12 @@ pub struct Page {
     pub books: Vec<Book>,
     pub entries: Vec<CatalogEntry>,
     pub next_offset: Option<usize>,
+    pub raw_entries: usize,
 }
+
+const MAX_PAGES: usize = 1000;
+const MAX_ENTRIES: usize = 200_000;
+const NODES_LIMIT: u32 = 2_000_000;
 
 impl Cw {
     pub fn new(base_url: &str, username: &str, password: &str) -> Result<Self> {
@@ -64,29 +69,43 @@ impl Cw {
         if offset > 0 {
             req = req.query(&QueryParam::new("offset", &offset.to_string()));
         }
-        let resp = req.send().await.map_err(|e| anyhow!("GET {path}: {e}"))?;
+        let resp = req
+            .send()
+            .await
+            .map_err(|e| anyhow!("GET {path}: {}", error_excerpt(&e.to_string())))?;
         let status = resp.status().as_u16();
-        let body = resp.text().await.map_err(|e| anyhow!("GET {path}: {e}"))?;
+        let body = resp
+            .text()
+            .await
+            .map_err(|e| anyhow!("GET {path}: {}", error_excerpt(&e.to_string())))?;
         Ok((status, body))
     }
 
     async fn feed(&self, path: &str) -> Result<Page> {
         let mut out = Page::default();
         let mut offset = 0;
-        loop {
+        for _ in 0..MAX_PAGES {
             let (status, body) = self.get(path, offset).await?;
             if !(200..300).contains(&status) {
                 bail!("GET {path}: HTTP {status} {}", error_excerpt(&body));
             }
             let page = parse_feed(&body).map_err(|e| anyhow!("GET {path}: {e}"))?;
-            let empty = page.books.is_empty() && page.entries.is_empty();
             out.books.extend(page.books);
             out.entries.extend(page.entries);
+            if out.books.len() + out.entries.len() > MAX_ENTRIES {
+                bail!("GET {path}: more than {MAX_ENTRIES} entries");
+            }
             match page.next_offset {
-                Some(next) if next > offset && !empty => offset = next,
+                Some(next) if page.raw_entries > 0 && next == offset + page.raw_entries => {
+                    offset = next
+                }
+                Some(next) if page.raw_entries > 0 => {
+                    bail!("GET {path}: next offset {next} does not follow offset {offset}")
+                }
                 _ => return Ok(out),
             }
         }
+        bail!("GET {path}: more than {MAX_PAGES} pages")
     }
 
     pub async fn books(&self) -> Result<Vec<Book>> {
@@ -105,7 +124,7 @@ impl Cw {
         match self.get("/reconnect", 0).await? {
             (200..=299, _) => Ok(()),
             (404, _) => bail!(
-                "GET /reconnect: HTTP 404; the route is off (start calibre-web with -r or CALIBRE_RECONNECT=1)"
+                "GET /reconnect: HTTP 404; the route is off. -r / CALIBRE_RECONNECT=1 opens an unauthenticated, CSRF-free route: enable it only behind the LAN/Caddy boundary, or block /reconnect at the proxy except for orca"
             ),
             (status, body) => bail!("GET /reconnect: HTTP {status} {}", error_excerpt(&body)),
         }
@@ -184,8 +203,9 @@ fn parse_book(e: roxmltree::Node, uuid: &str) -> Book {
         .map(String::from)
         .collect();
     let series = child(e, "content")
+        .and_then(|c| child(c, "div"))
         .into_iter()
-        .flat_map(|c| c.descendants())
+        .flat_map(|d| d.children())
         .filter(|n| n.is_text())
         .find_map(|n| parse_series_line(n.text().unwrap_or_default()));
     Book {
@@ -207,7 +227,14 @@ fn parse_book(e: roxmltree::Node, uuid: &str) -> Book {
 }
 
 pub fn parse_feed(xml: &str) -> Result<Page> {
-    let doc = roxmltree::Document::parse(xml).map_err(|_| anyhow!("expected an OPDS feed"))?;
+    let doc = roxmltree::Document::parse_with_options(
+        xml,
+        roxmltree::ParsingOptions {
+            allow_dtd: false,
+            nodes_limit: NODES_LIMIT,
+        },
+    )
+    .map_err(|_| anyhow!("expected an OPDS feed"))?;
     let root = doc.root_element();
     if root.tag_name().name() != "feed" {
         bail!("expected an OPDS feed");
@@ -220,6 +247,7 @@ pub fn parse_feed(xml: &str) -> Result<Page> {
         ..Page::default()
     };
     for e in children(root, "entry") {
+        page.raw_entries += 1;
         let id = text_of(child(e, "id")).unwrap_or_default();
         if let Some(uuid) = id.strip_prefix("urn:uuid:") {
             page.books.push(parse_book(e, uuid));
@@ -290,6 +318,21 @@ mod tests {
             Some(("Dune [Saga]".into(), Some("1.5".into())))
         );
         assert_eq!(parse_series_line("TAGS: x"), None);
+    }
+
+    #[test]
+    fn series_in_comments_is_not_a_series() {
+        let xml = r#"<feed xmlns="http://www.w3.org/2005/Atom"><entry><title>T</title><id>urn:uuid:x</id>
+            <content type="xhtml"><div xmlns="http://www.w3.org/1999/xhtml">TAGS: a<br/><p>SERIES: Fake [2]</p></div></content></entry></feed>"#;
+        let b = &parse_feed(xml).unwrap().books[0];
+        assert_eq!(b.series, None);
+        assert_eq!(b.series_index, None);
+    }
+
+    #[test]
+    fn dtd_and_entity_payloads_are_rejected() {
+        let xml = r#"<?xml version="1.0"?><!DOCTYPE feed [<!ENTITY a "aaaaaaaaaa"><!ENTITY b "&a;&a;&a;&a;">]><feed xmlns="http://www.w3.org/2005/Atom"><entry><title>&b;</title><id>urn:uuid:x</id></entry></feed>"#;
+        assert!(parse_feed(xml).is_err());
     }
 
     #[test]

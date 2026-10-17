@@ -92,6 +92,10 @@ Register an endpoint with a `username`, a `password` secret, and a route.
 | `calibre-web.authors.list` | read | `/opds/author/letter/00` |
 | `calibre-web.library.refresh` | admin | `GET /reconnect` (needs `-r` or `CALIBRE_RECONNECT=1`) |
 
+`-r` / `CALIBRE_RECONNECT=1` opens `/reconnect` with no auth and no CSRF check.
+Enable it only behind the LAN/Caddy boundary, or block `/reconnect` at the proxy
+for everything except orca.
+
 The plugin registers an `ebooks` media facet whose units are the owned books,
 for ebook and audiobook parity.
 

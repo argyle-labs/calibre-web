@@ -264,8 +264,8 @@ mod tests {
         let mut got = Vec::new();
         let calls = serve_with(
             |path| match path {
-                "/opds/books/letter/00" => Some((200, feed(&book(1, "One"), Some(60)))),
-                "/opds/books/letter/00?offset=60" => Some((200, feed(&book(2, "Two"), None))),
+                "/opds/books/letter/00" => Some((200, feed(&book(1, "One"), Some(1)))),
+                "/opds/books/letter/00?offset=1" => Some((200, feed(&book(2, "Two"), None))),
                 _ => None,
             },
             || got = block(cw().books()).unwrap(),
@@ -281,12 +281,72 @@ mod tests {
     }
 
     #[test]
-    fn a_repeated_next_offset_stops_paging() {
+    fn a_next_offset_that_skips_or_repeats_fails() {
+        for next in [0, 5] {
+            serve_with(
+                move |_| Some((200, feed(&book(1, "One"), Some(next)))),
+                || {
+                    let e = block(cw().books()).unwrap_err().to_string();
+                    assert!(e.contains("does not follow"), "{e}");
+                },
+            );
+        }
+    }
+
+    #[test]
+    fn an_endless_growing_offset_hits_the_page_cap() {
         let calls = serve_with(
-            |_| Some((200, feed(&book(1, "One"), Some(0)))),
-            || assert_eq!(block(cw().books()).unwrap().len(), 1),
+            |path| {
+                let off: usize = path
+                    .split_once("offset=")
+                    .map_or(0, |(_, o)| o.parse().unwrap());
+                Some((200, feed(&book(off as u64, "B"), Some(off + 1))))
+            },
+            || {
+                let e = block(cw().books()).unwrap_err().to_string();
+                assert!(e.contains("pages"), "{e}");
+            },
         );
-        assert_eq!(calls.len(), 1);
+        assert_eq!(calls.len(), 1000);
+    }
+
+    #[test]
+    fn a_non_2xx_mid_pagination_fails_the_read() {
+        serve_with(
+            |path| match path {
+                "/opds/books/letter/00" => Some((200, feed(&book(1, "One"), Some(1)))),
+                _ => Some((502, "Bad Gateway".to_string())),
+            },
+            || {
+                let e = block(cw().books()).unwrap_err().to_string();
+                assert!(e.contains("HTTP 502"), "{e}");
+            },
+        );
+    }
+
+    #[test]
+    fn authorization_never_appears_in_errors() {
+        serve_with(
+            |_| Some((401, "Authorization: Basic YXV0b21hdGlvbjpwdw==".to_string())),
+            || {
+                let e = format!("{:#}", block(cw().books()).unwrap_err());
+                assert!(!e.contains("YXV0b21hdGlvbjpwdw=="), "{e}");
+                let e = format!("{:#}", block(cw().reconnect()).unwrap_err());
+                assert!(!e.contains("YXV0b21hdGlvbjpwdw=="), "{e}");
+            },
+        );
+    }
+
+    #[test]
+    fn units_without_an_endpoint_is_not_found() {
+        let e = plugin_toolkit::capsink::with_cap_sink(
+            Box::new(|cap: &str, _: &str| match cap {
+                "db.op" => Ok(json!({"rows": []}).to_string()),
+                _ => Err(format!("unexpected {cap}")),
+            }),
+            || block(CwMedia.units()).unwrap_err(),
+        );
+        assert!(matches!(e, MediaError::NotFound(_)), "{e:?}");
     }
 
     #[test]
