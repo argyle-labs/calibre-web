@@ -1,9 +1,3 @@
-//! calibre-web service backend — Ebook web library/reader.
-//!
-//! Implements `ServiceBackend` so the generic `service.*` tools
-//! (deploy/backup/restore/configure/status/connect/sync) drive calibre-web. No
-//! `#[orca_tool]`s — the only orca dep is `plugin-toolkit`. Modeled on the
-//! nfs StorageBackend. See orca/docs/PLUGIN-PROGRAM.md.
 #![allow(clippy::disallowed_types)]
 
 use plugin_toolkit::service::{
@@ -11,8 +5,6 @@ use plugin_toolkit::service::{
     WorkloadSpec,
 };
 
-/// calibre-web backend. Holds only the provider name; per-instance routes/creds
-/// come from the `Routes` the generic `service.*` tools hand each op.
 #[derive(Debug, Clone)]
 pub struct CalibreWebBackend {
     provider: &'static str,
@@ -28,10 +20,6 @@ impl ServiceBackend for CalibreWebBackend {
     fn provider(&self) -> &str {
         self.provider
     }
-
-    /// Runtimes calibre-web can be placed on. `service.deploy` hands the
-    /// `workload_spec` below to a matching deploy target — this backend never
-    /// drives pct/docker itself (that mechanic lives in the deploy-target domain).
     fn runtimes(&self) -> Vec<Runtime> {
         vec![Runtime::Docker, Runtime::Podman, Runtime::Lxc, Runtime::Vm]
     }
@@ -49,11 +37,6 @@ impl ServiceBackend for CalibreWebBackend {
     fn default_port(&self) -> u16 {
         8083
     }
-
-    /// In-workload paths holding config/data. This is ALL calibre-web declares for
-    /// backup — the generic pluggable backup (tar for containers/LXC, PBS for
-    /// Proxmox guests when available) snapshots these. No backup/restore code
-    /// here; those are inherited from ServiceBackend's defaults.
     fn data_paths(&self) -> Vec<String> {
         vec!["/config".to_string()]
     }
@@ -64,9 +47,6 @@ impl ServiceBackend for CalibreWebBackend {
         _instance: &'a str,
         _routes: &'a Routes,
     ) -> BoxFuture<'a, Result<WorkloadSpec, ServiceError>> {
-        // TODO: describe the calibre-web workload (image/template, ports, mounts,
-        // env) for the chosen runtime. The deploy target turns this into a
-        // compose service / LXC config / VM. See deploy-target::WorkloadSpec.
         Box::pin(async move { Err(ServiceError::unimplemented("calibre-web.workload_spec")) })
     }
 
@@ -76,7 +56,6 @@ impl ServiceBackend for CalibreWebBackend {
         _routes: &'a Routes,
         _config: &'a str,
     ) -> BoxFuture<'a, Result<(), ServiceError>> {
-        // TODO: apply calibre-web-specific config idempotently.
         Box::pin(async move { Err(ServiceError::unimplemented("calibre-web.configure")) })
     }
 
@@ -85,7 +64,6 @@ impl ServiceBackend for CalibreWebBackend {
         _instance: &'a str,
         _routes: &'a Routes,
     ) -> BoxFuture<'a, Result<ServiceStatus, ServiceError>> {
-        // TODO: real health/diagnostics.
         Box::pin(async move { Err(ServiceError::unimplemented("calibre-web.status")) })
     }
 }
