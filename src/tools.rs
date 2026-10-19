@@ -6,8 +6,23 @@ use crate::endpoint_db;
 pub async fn connect(name: &str) -> Result<Cw> {
     let password = plugin_toolkit::secrets::resolve_scoped("calibre-web", name, "password")?;
     let row = endpoint_db::require(name)?;
-    let base_url = route::resolve_reachable(name, &row.routes, false).await?;
-    Cw::new(&base_url, &row.username, password.expose_secret())
+    let mut tried = Vec::new();
+    for base_url in row
+        .routes
+        .iter()
+        .filter(|r| r.enabled)
+        .filter_map(|r| r.base_url())
+    {
+        let cw = Cw::new(&base_url, &row.username, password.expose_secret())?;
+        match cw.catalog("books").await {
+            Ok(_) => return Ok(cw),
+            Err(e) => tried.push(format!("{e:#}")),
+        }
+    }
+    bail!(
+        "endpoint '{name}' has no route serving a Calibre-Web OPDS catalog: {}",
+        tried.join("; ")
+    )
 }
 
 #[orca_struct(args)]
@@ -57,7 +72,7 @@ pub struct CatalogPage {
 
 /// List one page of books with title, authors, series + index, formats,
 /// languages and publication date, read from the OPDS catalog
-/// (`/opds/books/letter/00`). Follow `next_offset` until it is null.
+/// (the "All" books feed advertised under `/opds/books`). Follow `next_offset` until it is null.
 /// This is the owned-ebook inventory for ebook and audiobook parity.
 #[orca_tool(domain = "calibre-web", verb = "books.list", role = "read")]
 async fn calibre_web_books_list(args: ListArgs, _ctx: &ToolCtx) -> Result<BookPage> {
@@ -72,7 +87,7 @@ async fn calibre_web_books_list(args: ListArgs, _ctx: &ToolCtx) -> Result<BookPa
     })
 }
 
-/// List one page of series from the OPDS catalog (`/opds/series/letter/00`).
+/// List one page of series from the OPDS catalog (the "All" series feed advertised under `/opds/series`).
 /// Follow `next_offset` until it is null.
 #[orca_tool(domain = "calibre-web", verb = "series.list", role = "read")]
 async fn calibre_web_series_list(args: ListArgs, _ctx: &ToolCtx) -> Result<CatalogPage> {
@@ -87,7 +102,7 @@ async fn calibre_web_series_list(args: ListArgs, _ctx: &ToolCtx) -> Result<Catal
     })
 }
 
-/// List one page of authors from the OPDS catalog (`/opds/author/letter/00`).
+/// List one page of authors from the OPDS catalog (the "All" authors feed advertised under `/opds/author`).
 /// Follow `next_offset` until it is null.
 #[orca_tool(domain = "calibre-web", verb = "authors.list", role = "read")]
 async fn calibre_web_authors_list(args: ListArgs, _ctx: &ToolCtx) -> Result<CatalogPage> {

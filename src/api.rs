@@ -112,22 +112,85 @@ impl Cw {
         bail!("GET {path}: more than {MAX_PAGES} pages")
     }
 
+    fn local(&self, href: &str) -> Result<String> {
+        let (scheme, rest) = self
+            .base_url
+            .split_once("://")
+            .ok_or_else(|| anyhow!("base url {} has no scheme", self.base_url))?;
+        let (authority, prefix) = rest.find('/').map_or((rest, ""), |i| rest.split_at(i));
+        let origin = format!("{scheme}://{authority}");
+        let path = if href.starts_with('/') && !href.starts_with("//") {
+            href
+        } else if let Some(p) = href
+            .get(..origin.len())
+            .filter(|o| o.eq_ignore_ascii_case(&origin))
+            .map(|_| &href[origin.len()..])
+            .filter(|p| p.starts_with('/') && !p.starts_with("//"))
+        {
+            p
+        } else {
+            bail!("refusing link {href:?}: not on {origin}");
+        };
+        if path.contains('\\') {
+            bail!("refusing link {href:?}: not on {origin}");
+        }
+        let path = path.split(['?', '#']).next().unwrap_or_default();
+        Ok(match path.strip_prefix(prefix) {
+            Some(rest) if !prefix.is_empty() && rest.starts_with('/') => rest.to_string(),
+            _ => path.to_string(),
+        })
+    }
+
+    async fn nav(&self, path: &str) -> Result<Vec<NavEntry>> {
+        let (status, body) = self.get(path, 0).await?;
+        if !(200..300).contains(&status) {
+            bail!("GET {path}: HTTP {status} {}", error_excerpt(&body));
+        }
+        parse_nav(&body).map_err(|e| anyhow!("GET {path}: {e}"))
+    }
+
+    pub async fn catalog(&self, section: &str) -> Result<String> {
+        let suffix = format!("/opds/{section}");
+        let root = self.nav("/opds").await?;
+        let Some(nav) = root
+            .iter()
+            .filter_map(|e| self.local(&e.href).ok())
+            .find(|h| h.trim_end_matches('/').ends_with(&suffix))
+        else {
+            bail!(
+                "GET /opds: no {section} feed advertised; {} does not serve a Calibre-Web OPDS catalog",
+                self.base_url
+            );
+        };
+        let all = self
+            .nav(&nav)
+            .await?
+            .into_iter()
+            .find(|e| e.href.trim_end_matches('/').ends_with("/letter/00") || e.title == "All")
+            .map(|e| self.local(&e.href))
+            .transpose()?;
+        Ok(all.unwrap_or(nav))
+    }
+
     pub async fn books_page(&self, offset: usize, limit: usize) -> Result<Page> {
-        self.feed("/opds/books/letter/00", offset, limit).await
+        let path = self.catalog("books").await?;
+        self.feed(&path, offset, limit).await
     }
 
     pub async fn series_page(&self, offset: usize, limit: usize) -> Result<Page> {
-        self.feed("/opds/series/letter/00", offset, limit).await
+        let path = self.catalog("series").await?;
+        self.feed(&path, offset, limit).await
     }
 
     pub async fn authors_page(&self, offset: usize, limit: usize) -> Result<Page> {
-        self.feed("/opds/author/letter/00", offset, limit).await
+        let path = self.catalog("author").await?;
+        self.feed(&path, offset, limit).await
     }
 
     pub async fn books(&self) -> Result<Vec<Book>> {
         let page = self.books_page(0, MAX_ENTRIES).await?;
         if page.next_offset.is_some() {
-            bail!("GET /opds/books/letter/00: more than {MAX_ENTRIES} entries");
+            bail!("books feed: more than {MAX_ENTRIES} entries");
         }
         Ok(page.books)
     }
@@ -219,8 +282,14 @@ fn parse_book(e: roxmltree::Node, uuid: &str) -> Book {
     let formats = links
         .iter()
         .filter(|l| l.attribute("rel") == Some("http://opds-spec.org/acquisition"))
-        .filter_map(|l| l.attribute("title"))
-        .map(String::from)
+        .filter_map(|l| {
+            l.attribute("title").map(String::from).or_else(|| {
+                let href = l.attribute("href")?;
+                let rest = &href[href.find("/opds/download/")? + "/opds/download/".len()..];
+                let fmt = rest.split(['/', '?']).nth(1)?;
+                (!fmt.is_empty()).then(|| fmt.to_ascii_uppercase())
+            })
+        })
         .collect();
     let series = child(e, "content")
         .and_then(|c| child(c, "div"))
@@ -246,7 +315,7 @@ fn parse_book(e: roxmltree::Node, uuid: &str) -> Book {
     }
 }
 
-pub fn parse_feed(xml: &str, max_entries: usize) -> Result<Page> {
+fn parse_doc(xml: &str) -> Result<roxmltree::Document<'_>> {
     let doc = roxmltree::Document::parse_with_options(
         xml,
         roxmltree::ParsingOptions {
@@ -255,10 +324,35 @@ pub fn parse_feed(xml: &str, max_entries: usize) -> Result<Page> {
         },
     )
     .map_err(|_| anyhow!("expected an OPDS feed"))?;
-    let root = doc.root_element();
-    if root.tag_name().name() != "feed" {
+    if doc.root_element().tag_name().name() != "feed" {
         bail!("expected an OPDS feed");
     }
+    Ok(doc)
+}
+
+#[derive(Debug, PartialEq)]
+pub struct NavEntry {
+    pub title: String,
+    pub href: String,
+}
+
+pub fn parse_nav(xml: &str) -> Result<Vec<NavEntry>> {
+    let doc = parse_doc(xml)?;
+    let root = doc.root_element();
+    Ok(children(root, "entry")
+        .filter_map(|e| {
+            let href = children(e, "link").find_map(|l| l.attribute("href"))?;
+            Some(NavEntry {
+                title: text_of(child(e, "title")).unwrap_or_default(),
+                href: href.to_string(),
+            })
+        })
+        .collect())
+}
+
+pub fn parse_feed(xml: &str, max_entries: usize) -> Result<Page> {
+    let doc = parse_doc(xml)?;
+    let root = doc.root_element();
     let mut page = Page {
         next_offset: children(root, "link")
             .find(|l| l.attribute("rel") == Some("next"))
@@ -314,6 +408,20 @@ mod tests {
 </feed>"#;
 
     #[test]
+    fn formats_fall_back_to_the_download_href() {
+        let xml = r#"<feed xmlns="http://www.w3.org/2005/Atom"><entry><title>T</title><id>urn:uuid:u</id>
+<link rel="http://opds-spec.org/acquisition" href="/cw/opds/download/9/epub/"/>
+<link rel="http://opds-spec.org/acquisition" href="/opds/download/9/kepub?x=1"/>
+<link rel="http://opds-spec.org/acquisition" href="/opds/download/9/"/>
+<link rel="http://opds-spec.org/acquisition" href="/elsewhere/9/pdf/"/>
+</entry></feed>"#;
+        assert_eq!(
+            parse_feed(xml, usize::MAX).unwrap().books[0].formats,
+            vec!["EPUB", "KEPUB"]
+        );
+    }
+
+    #[test]
     fn feed_maps_books_entries_and_next_offset() {
         let p = parse_feed(FEED, usize::MAX).unwrap();
         assert_eq!(p.next_offset, Some(60));
@@ -366,6 +474,79 @@ mod tests {
         assert!(p.truncated);
         assert_eq!(p.books.len(), 1);
         assert!(p.entries.is_empty());
+    }
+
+    const ROOT: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <link rel="self" href="/opds" type="application/atom+xml;profile=opds-catalog;kind=navigation"/>
+  <link rel="search" href="/opds/osd" type="application/opensearchdescription+xml"/>
+  <title>Calibre-Web</title>
+  <entry>
+    <title>Alphabetical Books</title>
+    <link href="/opds/books" type="application/atom+xml;profile=opds-catalog"/>
+    <id>/opds/books</id>
+    <content type="text">Books sorted alphabetically</content>
+  </entry>
+  <entry>
+    <title>Series</title>
+    <link href="/opds/series" type="application/atom+xml;profile=opds-catalog"/>
+    <id>/opds/series</id>
+  </entry>
+  <entry>
+    <title>Languages</title>
+    <link href="/opds/language/" type="application/atom+xml;profile=opds-catalog"/>
+    <id>/opds/language/</id>
+  </entry>
+</feed>"#;
+
+    #[test]
+    fn untitled_acquisitions_take_the_format_from_the_href() {
+        let xml = r#"<feed xmlns="http://www.w3.org/2005/Atom"><entry><title>11/22/63</title><id>urn:uuid:3146</id>
+    <link type="image/jpeg" href="/opds/cover/16" rel="http://opds-spec.org/image"/>
+    <link rel="http://opds-spec.org/acquisition" href="/opds/download/16/epub/" length="1106212" type="application/epub+zip"/>
+    <link rel="http://opds-spec.org/acquisition" href="/opds/download/16/kepub/" length="1256000" type="application/epub+zip"/>
+  </entry></feed>"#;
+        let b = &parse_feed(xml, usize::MAX).unwrap().books[0];
+        assert_eq!(b.id, Some(16));
+        assert_eq!(b.formats, vec!["EPUB", "KEPUB"]);
+    }
+
+    #[test]
+    fn nav_lists_entry_links() {
+        let nav = parse_nav(ROOT).unwrap();
+        assert_eq!(nav.len(), 3);
+        assert_eq!(
+            nav[1],
+            NavEntry {
+                title: "Series".into(),
+                href: "/opds/series".into()
+            }
+        );
+        assert!(parse_nav("<html/>").is_err());
+    }
+
+    #[test]
+    fn hrefs_resolve_against_the_base_path() {
+        let cw = Cw::new("http://h:1/cw/", "u", "p").unwrap();
+        assert_eq!(
+            cw.local("/cw/opds/books/letter/00?").unwrap(),
+            "/opds/books/letter/00"
+        );
+        assert_eq!(
+            cw.local("http://h:1/cw/opds/series").unwrap(),
+            "/opds/series"
+        );
+        for bad in [
+            "http://h:2/cw/opds",
+            "http://h:1@e/x",
+            "//e/x",
+            "x",
+            "/a\\b",
+        ] {
+            assert!(cw.local(bad).is_err(), "{bad}");
+        }
+        let cw = Cw::new("http://h:1", "u", "p").unwrap();
+        assert_eq!(cw.local("/opds/books").unwrap(), "/opds/books");
     }
 
     #[test]
