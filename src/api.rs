@@ -38,6 +38,7 @@ pub struct Page {
     pub entries: Vec<CatalogEntry>,
     pub next_offset: Option<usize>,
     pub raw_entries: usize,
+    pub truncated: bool,
 }
 
 const MAX_PAGES: usize = 1000;
@@ -81,19 +82,22 @@ impl Cw {
         Ok((status, body))
     }
 
-    async fn feed(&self, path: &str) -> Result<Page> {
+    async fn feed(&self, path: &str, start: usize, limit: usize) -> Result<Page> {
         let mut out = Page::default();
-        let mut offset = 0;
+        let mut offset = start;
         for _ in 0..MAX_PAGES {
             let (status, body) = self.get(path, offset).await?;
             if !(200..300).contains(&status) {
                 bail!("GET {path}: HTTP {status} {}", error_excerpt(&body));
             }
-            let page = parse_feed(&body).map_err(|e| anyhow!("GET {path}: {e}"))?;
+            let page = parse_feed(&body, limit - out.raw_entries)
+                .map_err(|e| anyhow!("GET {path}: {e}"))?;
             out.books.extend(page.books);
             out.entries.extend(page.entries);
-            if out.books.len() + out.entries.len() > MAX_ENTRIES {
-                bail!("GET {path}: more than {MAX_ENTRIES} entries");
+            out.raw_entries += page.raw_entries;
+            if out.raw_entries >= limit && (page.truncated || page.next_offset.is_some()) {
+                out.next_offset = Some(offset + page.raw_entries);
+                return Ok(out);
             }
             match page.next_offset {
                 Some(next) if page.raw_entries > 0 && next == offset + page.raw_entries => {
@@ -108,16 +112,32 @@ impl Cw {
         bail!("GET {path}: more than {MAX_PAGES} pages")
     }
 
+    pub async fn books_page(&self, offset: usize, limit: usize) -> Result<Page> {
+        self.feed("/opds/books/letter/00", offset, limit).await
+    }
+
+    pub async fn series_page(&self, offset: usize, limit: usize) -> Result<Page> {
+        self.feed("/opds/series/letter/00", offset, limit).await
+    }
+
+    pub async fn authors_page(&self, offset: usize, limit: usize) -> Result<Page> {
+        self.feed("/opds/author/letter/00", offset, limit).await
+    }
+
     pub async fn books(&self) -> Result<Vec<Book>> {
-        Ok(self.feed("/opds/books/letter/00").await?.books)
+        let page = self.books_page(0, MAX_ENTRIES).await?;
+        if page.next_offset.is_some() {
+            bail!("GET /opds/books/letter/00: more than {MAX_ENTRIES} entries");
+        }
+        Ok(page.books)
     }
 
     pub async fn series(&self) -> Result<Vec<CatalogEntry>> {
-        Ok(self.feed("/opds/series/letter/00").await?.entries)
+        Ok(self.series_page(0, MAX_ENTRIES).await?.entries)
     }
 
     pub async fn authors(&self) -> Result<Vec<CatalogEntry>> {
-        Ok(self.feed("/opds/author/letter/00").await?.entries)
+        Ok(self.authors_page(0, MAX_ENTRIES).await?.entries)
     }
 
     pub async fn reconnect(&self) -> Result<()> {
@@ -226,7 +246,7 @@ fn parse_book(e: roxmltree::Node, uuid: &str) -> Book {
     }
 }
 
-pub fn parse_feed(xml: &str) -> Result<Page> {
+pub fn parse_feed(xml: &str, max_entries: usize) -> Result<Page> {
     let doc = roxmltree::Document::parse_with_options(
         xml,
         roxmltree::ParsingOptions {
@@ -247,6 +267,10 @@ pub fn parse_feed(xml: &str) -> Result<Page> {
         ..Page::default()
     };
     for e in children(root, "entry") {
+        if page.raw_entries >= max_entries {
+            page.truncated = true;
+            break;
+        }
         page.raw_entries += 1;
         let id = text_of(child(e, "id")).unwrap_or_default();
         if let Some(uuid) = id.strip_prefix("urn:uuid:") {
@@ -291,7 +315,7 @@ mod tests {
 
     #[test]
     fn feed_maps_books_entries_and_next_offset() {
-        let p = parse_feed(FEED).unwrap();
+        let p = parse_feed(FEED, usize::MAX).unwrap();
         assert_eq!(p.next_offset, Some(60));
         assert_eq!(
             p.entries,
@@ -324,7 +348,7 @@ mod tests {
     fn series_in_comments_is_not_a_series() {
         let xml = r#"<feed xmlns="http://www.w3.org/2005/Atom"><entry><title>T</title><id>urn:uuid:x</id>
             <content type="xhtml"><div xmlns="http://www.w3.org/1999/xhtml">TAGS: a<br/><p>SERIES: Fake [2]</p></div></content></entry></feed>"#;
-        let b = &parse_feed(xml).unwrap().books[0];
+        let b = &parse_feed(xml, usize::MAX).unwrap().books[0];
         assert_eq!(b.series, None);
         assert_eq!(b.series_index, None);
     }
@@ -332,12 +356,21 @@ mod tests {
     #[test]
     fn dtd_and_entity_payloads_are_rejected() {
         let xml = r#"<?xml version="1.0"?><!DOCTYPE feed [<!ENTITY a "aaaaaaaaaa"><!ENTITY b "&a;&a;&a;&a;">]><feed xmlns="http://www.w3.org/2005/Atom"><entry><title>&b;</title><id>urn:uuid:x</id></entry></feed>"#;
-        assert!(parse_feed(xml).is_err());
+        assert!(parse_feed(xml, usize::MAX).is_err());
+    }
+
+    #[test]
+    fn parse_stops_at_the_entry_cap() {
+        let p = parse_feed(FEED, 1).unwrap();
+        assert_eq!(p.raw_entries, 1);
+        assert!(p.truncated);
+        assert_eq!(p.books.len(), 1);
+        assert!(p.entries.is_empty());
     }
 
     #[test]
     fn non_feed_bodies_are_rejected() {
-        assert!(parse_feed("<html><body/></html>").is_err());
-        assert!(parse_feed("not xml").is_err());
+        assert!(parse_feed("<html><body/></html>", usize::MAX).is_err());
+        assert!(parse_feed("not xml", usize::MAX).is_err());
     }
 }

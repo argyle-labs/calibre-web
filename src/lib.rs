@@ -281,6 +281,43 @@ mod tests {
     }
 
     #[test]
+    fn pages_stop_at_the_limit_and_resume_mid_page() {
+        let two = format!("{}{}", book(1, "One"), book(2, "Two"));
+        let mut first = api::Page::default();
+        let mut rest = api::Page::default();
+        let calls = serve_with(
+            move |path| match path {
+                "/opds/books/letter/00" => Some((200, feed(&two, Some(2)))),
+                "/opds/books/letter/00?offset=1" => Some((200, feed(&book(2, "Two"), Some(2)))),
+                "/opds/books/letter/00?offset=2" => Some((200, feed(&book(3, "Three"), None))),
+                _ => None,
+            },
+            || {
+                first = block(cw().books_page(0, 1)).unwrap();
+                rest = block(cw().books_page(1, 10)).unwrap();
+            },
+        );
+        assert_eq!(first.books.len(), 1);
+        assert_eq!(first.next_offset, Some(1));
+        assert_eq!(rest.books.len(), 2);
+        assert_eq!(rest.next_offset, None);
+        assert_eq!(calls.len(), 3, "{calls:?}");
+    }
+
+    #[test]
+    fn a_limit_on_a_page_boundary_reports_the_next_page() {
+        let mut got = api::Page::default();
+        serve_with(
+            |path| match path {
+                "/opds/books/letter/00" => Some((200, feed(&book(1, "One"), Some(1)))),
+                _ => None,
+            },
+            || got = block(cw().books_page(0, 1)).unwrap(),
+        );
+        assert_eq!(got.next_offset, Some(1));
+    }
+
+    #[test]
     fn a_next_offset_that_skips_or_repeats_fails() {
         for next in [0, 5] {
             serve_with(

@@ -92,6 +92,9 @@ Register an endpoint with a `username`, a `password` secret, and a route.
 | `calibre-web.authors.list` | read | `/opds/author/letter/00` |
 | `calibre-web.library.refresh` | admin | `GET /reconnect` (needs `-r` or `CALIBRE_RECONNECT=1`) |
 
+The list tools return one page: `--limit` (default 500, max 2000) entries from
+`--offset`, plus `next_offset` to pass on the next call (null on the last page).
+
 `-r` / `CALIBRE_RECONNECT=1` opens `/reconnect` with no auth and no CSRF check.
 Enable it only behind the LAN/Caddy boundary, or block `/reconnect` at the proxy
 for everything except orca.
