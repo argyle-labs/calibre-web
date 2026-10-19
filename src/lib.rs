@@ -69,6 +69,7 @@ impl ServiceBackend for CalibreWebBackend {
 }
 
 pub mod api;
+mod cwa;
 pub mod tools;
 
 use plugin_toolkit::clap;
@@ -509,6 +510,29 @@ mod tests {
             || assert_eq!(block(cw().books()).unwrap().len(), 1),
         );
         assert_eq!(calls[1].1, "/opds/books");
+    }
+
+    #[test]
+    fn books_survive_an_unavailable_series_listing() {
+        let calls = serve_with(
+            |path| {
+                (path == "/opds/books/letter/00").then(|| {
+                    (
+                        200,
+                        feed(
+                            r#"<entry><title>T</title><id>urn:uuid:u1</id></entry>"#,
+                            None,
+                        ),
+                    )
+                })
+            },
+            || {
+                let books = block(cw().books()).unwrap();
+                assert_eq!(books.len(), 1);
+                assert_eq!(books[0].series, None);
+            },
+        );
+        assert_eq!(calls.last().unwrap().1, "/login");
     }
 
     #[test]

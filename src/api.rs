@@ -8,6 +8,8 @@ use plugin_toolkit::reqwest::Client as HttpClient;
 
 pub struct Cw {
     base_url: String,
+    username: String,
+    password: String,
     http: HttpClient,
 }
 
@@ -57,12 +59,26 @@ impl Cw {
             .build()?;
         Ok(Self {
             base_url: base_url.trim_end_matches('/').to_string(),
+            username: username.to_string(),
+            password: password.to_string(),
             http,
         })
     }
 
     pub fn base_url(&self) -> &str {
         &self.base_url
+    }
+
+    pub(crate) fn username(&self) -> &str {
+        &self.username
+    }
+
+    pub(crate) fn password(&self) -> &str {
+        &self.password
+    }
+
+    pub(crate) fn http(&self) -> &HttpClient {
+        &self.http
     }
 
     async fn get(&self, path: &str, offset: usize) -> Result<(u16, String)> {
@@ -174,7 +190,14 @@ impl Cw {
 
     pub async fn books_page(&self, offset: usize, limit: usize) -> Result<Page> {
         let path = self.catalog("books").await?;
-        self.feed(&path, offset, limit).await
+        let mut page = self.feed(&path, offset, limit).await?;
+        if let Err(e) = self.enrich_series(&mut page.books).await {
+            plugin_toolkit::tracing::warn!(
+                "calibre-web {}: series from /ajax/listbooks unavailable: {e:#}",
+                self.base_url
+            );
+        }
+        Ok(page)
     }
 
     pub async fn series_page(&self, offset: usize, limit: usize) -> Result<Page> {
@@ -216,7 +239,7 @@ impl Cw {
 
 const ERROR_EXCERPT: usize = 256;
 
-fn error_excerpt(body: &str) -> String {
+pub(crate) fn error_excerpt(body: &str) -> String {
     let body = body.trim();
     let cut = body
         .char_indices()
