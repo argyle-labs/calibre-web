@@ -449,6 +449,69 @@ mod tests {
     }
 
     #[test]
+    fn off_origin_root_links_are_never_fetched() {
+        for href in [
+            "@evil.test/opds/books",
+            ".evil.test/opds/books",
+            "//evil.test/opds/books",
+            "http://evil.test/opds/books",
+            "https://cw.test/opds/books",
+            "http://cw.test.evil.test/opds/books",
+            "http://cw.test@evil.test/opds/books",
+        ] {
+            let root = nav_feed(&[("Alphabetical Books", href)]);
+            let calls = serve_with(
+                move |path| (path == "/opds").then(|| (200, root.clone())),
+                || {
+                    let e = block(cw().books()).unwrap_err().to_string();
+                    assert!(e.contains("does not serve"), "{href}: {e}");
+                },
+            );
+            assert_eq!(
+                calls,
+                vec![("GET".to_string(), "/opds".to_string())],
+                "{href}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_off_origin_all_entry_fails_without_fetching() {
+        let calls = serve_with(
+            |path| {
+                (path == "/opds/books").then(|| {
+                    (
+                        200,
+                        nav_feed(&[("All", "http://evil.test/opds/books/letter/00")]),
+                    )
+                })
+            },
+            || {
+                let e = block(cw().books()).unwrap_err().to_string();
+                assert!(e.contains("refusing link"), "{e}");
+            },
+        );
+        assert_eq!(calls.len(), 2);
+        assert!(calls.iter().all(|(_, p)| p.starts_with('/')));
+    }
+
+    #[test]
+    fn same_origin_absolute_links_resolve_to_paths() {
+        let calls = serve_with(
+            |path| match path {
+                "/opds" => Some((
+                    200,
+                    nav_feed(&[("Alphabetical Books", "http://cw.test/opds/books?x=1")]),
+                )),
+                "/opds/books/letter/00" => Some((200, feed(&book(1, "One"), None))),
+                _ => None,
+            },
+            || assert_eq!(block(cw().books()).unwrap().len(), 1),
+        );
+        assert_eq!(calls[1].1, "/opds/books");
+    }
+
+    #[test]
     fn a_calibre_content_server_root_is_not_a_catalog() {
         serve_with(
             |path| {

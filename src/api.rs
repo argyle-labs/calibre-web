@@ -112,21 +112,33 @@ impl Cw {
         bail!("GET {path}: more than {MAX_PAGES} pages")
     }
 
-    fn local(&self, href: &str) -> String {
-        let href = match href.split_once("://") {
-            Some((_, rest)) => rest.find('/').map_or("/", |i| &rest[i..]),
-            None => href,
-        };
-        let prefix = self
+    fn local(&self, href: &str) -> Result<String> {
+        let (scheme, rest) = self
             .base_url
             .split_once("://")
-            .and_then(|(_, rest)| rest.find('/').map(|i| &rest[i..]))
-            .unwrap_or("");
-        let href = href.split('?').next().unwrap_or_default();
-        match href.strip_prefix(prefix) {
-            Some(rest) if !prefix.is_empty() && rest.starts_with('/') => rest.to_string(),
-            _ => href.to_string(),
+            .ok_or_else(|| anyhow!("base url {} has no scheme", self.base_url))?;
+        let (authority, prefix) = rest.find('/').map_or((rest, ""), |i| rest.split_at(i));
+        let origin = format!("{scheme}://{authority}");
+        let path = if href.starts_with('/') && !href.starts_with("//") {
+            href
+        } else if let Some(p) = href
+            .get(..origin.len())
+            .filter(|o| o.eq_ignore_ascii_case(&origin))
+            .map(|_| &href[origin.len()..])
+            .filter(|p| p.starts_with('/') && !p.starts_with("//"))
+        {
+            p
+        } else {
+            bail!("refusing link {href:?}: not on {origin}");
+        };
+        if path.contains('\\') {
+            bail!("refusing link {href:?}: not on {origin}");
         }
+        let path = path.split(['?', '#']).next().unwrap_or_default();
+        Ok(match path.strip_prefix(prefix) {
+            Some(rest) if !prefix.is_empty() && rest.starts_with('/') => rest.to_string(),
+            _ => path.to_string(),
+        })
     }
 
     async fn nav(&self, path: &str) -> Result<Vec<NavEntry>> {
@@ -142,7 +154,7 @@ impl Cw {
         let root = self.nav("/opds").await?;
         let Some(nav) = root
             .iter()
-            .map(|e| self.local(&e.href))
+            .filter_map(|e| self.local(&e.href).ok())
             .find(|h| h.trim_end_matches('/').ends_with(&suffix))
         else {
             bail!(
@@ -155,7 +167,8 @@ impl Cw {
             .await?
             .into_iter()
             .find(|e| e.href.trim_end_matches('/').ends_with("/letter/00") || e.title == "All")
-            .map(|e| self.local(&e.href));
+            .map(|e| self.local(&e.href))
+            .transpose()?;
         Ok(all.unwrap_or(nav))
     }
 
@@ -395,6 +408,20 @@ mod tests {
 </feed>"#;
 
     #[test]
+    fn formats_fall_back_to_the_download_href() {
+        let xml = r#"<feed xmlns="http://www.w3.org/2005/Atom"><entry><title>T</title><id>urn:uuid:u</id>
+<link rel="http://opds-spec.org/acquisition" href="/cw/opds/download/9/epub/"/>
+<link rel="http://opds-spec.org/acquisition" href="/opds/download/9/kepub?x=1"/>
+<link rel="http://opds-spec.org/acquisition" href="/opds/download/9/"/>
+<link rel="http://opds-spec.org/acquisition" href="/elsewhere/9/pdf/"/>
+</entry></feed>"#;
+        assert_eq!(
+            parse_feed(xml, usize::MAX).unwrap().books[0].formats,
+            vec!["EPUB", "KEPUB"]
+        );
+    }
+
+    #[test]
     fn feed_maps_books_entries_and_next_offset() {
         let p = parse_feed(FEED, usize::MAX).unwrap();
         assert_eq!(p.next_offset, Some(60));
@@ -502,12 +529,24 @@ mod tests {
     fn hrefs_resolve_against_the_base_path() {
         let cw = Cw::new("http://h:1/cw/", "u", "p").unwrap();
         assert_eq!(
-            cw.local("/cw/opds/books/letter/00?"),
+            cw.local("/cw/opds/books/letter/00?").unwrap(),
             "/opds/books/letter/00"
         );
-        assert_eq!(cw.local("http://h:1/cw/opds/series"), "/opds/series");
+        assert_eq!(
+            cw.local("http://h:1/cw/opds/series").unwrap(),
+            "/opds/series"
+        );
+        for bad in [
+            "http://h:2/cw/opds",
+            "http://h:1@e/x",
+            "//e/x",
+            "x",
+            "/a\\b",
+        ] {
+            assert!(cw.local(bad).is_err(), "{bad}");
+        }
         let cw = Cw::new("http://h:1", "u", "p").unwrap();
-        assert_eq!(cw.local("/opds/books"), "/opds/books");
+        assert_eq!(cw.local("/opds/books").unwrap(), "/opds/books");
     }
 
     #[test]
