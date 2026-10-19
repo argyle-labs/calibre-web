@@ -223,13 +223,46 @@ mod tests {
                 assert!(auth, "missing basic auth on {url}");
                 let path = url.trim_start_matches("http://cw.test").to_string();
                 log.lock().unwrap().push((method, path.clone()));
-                let (status, body) = route(&path).unwrap_or((404, "Not Found".to_string()));
+                let (status, body) = route(&path)
+                    .or_else(|| catalog_nav(&path))
+                    .unwrap_or((404, "Not Found".to_string()));
                 Ok(json!({"status": status, "headers": [], "body": body.into_bytes()}).to_string())
             }),
             body,
         );
         let out = seen.lock().unwrap().clone();
         out
+    }
+
+    fn nav_feed(entries: &[(&str, &str)]) -> String {
+        let entries: String = entries
+            .iter()
+            .map(|(title, href)| {
+                format!(
+                    r#"<entry><title>{title}</title><id>{href}</id><link rel="subsection" type="application/atom+xml;profile=opds-catalog" href="{href}"/></entry>"#
+                )
+            })
+            .collect();
+        format!(
+            r#"<feed xmlns="http://www.w3.org/2005/Atom"><link rel="self" href="/opds?"/><author><name>Calibre-Web</name><uri>https://github.com/crocodilestick/calibre-web-automated</uri></author>{entries}</feed>"#
+        )
+    }
+
+    fn catalog_nav(path: &str) -> Option<(u16, String)> {
+        let body = match path {
+            "/opds" => nav_feed(&[
+                ("Alphabetical Books", "/opds/books"),
+                ("Recently added Books", "/opds/new"),
+                ("Authors", "/opds/author"),
+                ("Series", "/opds/series"),
+            ]),
+            "/opds/books" | "/opds/series" | "/opds/author" => nav_feed(&[
+                ("All", &format!("{path}/letter/00")),
+                ("A", &format!("{path}/letter/A")),
+            ]),
+            _ => return None,
+        };
+        Some((200, body))
     }
 
     fn block<T>(f: impl std::future::Future<Output = T>) -> T {
@@ -270,7 +303,7 @@ mod tests {
             },
             || got = block(cw().books()).unwrap(),
         );
-        assert_eq!(calls.len(), 2, "{calls:?}");
+        assert_eq!(calls.len(), 4, "{calls:?}");
         assert_eq!(got.len(), 2);
         assert_eq!(got[1].series_index.as_deref(), Some("2"));
         let u = to_unit("http://cw.test/", &got[0]).unwrap();
@@ -301,7 +334,7 @@ mod tests {
         assert_eq!(first.next_offset, Some(1));
         assert_eq!(rest.books.len(), 2);
         assert_eq!(rest.next_offset, None);
-        assert_eq!(calls.len(), 3, "{calls:?}");
+        assert_eq!(calls.len(), 7, "{calls:?}");
     }
 
     #[test]
@@ -321,7 +354,10 @@ mod tests {
     fn a_next_offset_that_skips_or_repeats_fails() {
         for next in [0, 5] {
             serve_with(
-                move |_| Some((200, feed(&book(1, "One"), Some(next)))),
+                move |path| {
+                    path.contains("/letter/")
+                        .then(|| (200, feed(&book(1, "One"), Some(next))))
+                },
                 || {
                     let e = block(cw().books()).unwrap_err().to_string();
                     assert!(e.contains("does not follow"), "{e}");
@@ -334,6 +370,9 @@ mod tests {
     fn an_endless_growing_offset_hits_the_page_cap() {
         let calls = serve_with(
             |path| {
+                if !path.contains("/letter/") {
+                    return None;
+                }
                 let off: usize = path
                     .split_once("offset=")
                     .map_or(0, |(_, o)| o.parse().unwrap());
@@ -344,7 +383,7 @@ mod tests {
                 assert!(e.contains("pages"), "{e}");
             },
         );
-        assert_eq!(calls.len(), 1000);
+        assert_eq!(calls.len(), 1002);
     }
 
     #[test]
@@ -352,7 +391,8 @@ mod tests {
         serve_with(
             |path| match path {
                 "/opds/books/letter/00" => Some((200, feed(&book(1, "One"), Some(1)))),
-                _ => Some((502, "Bad Gateway".to_string())),
+                "/opds/books/letter/00?offset=1" => Some((502, "Bad Gateway".to_string())),
+                _ => None,
             },
             || {
                 let e = block(cw().books()).unwrap_err().to_string();
@@ -405,7 +445,29 @@ mod tests {
                 assert_eq!(block(cw().authors()).unwrap()[0].name, "Name");
             },
         );
-        assert_eq!(calls.len(), 2);
+        assert_eq!(calls.len(), 6);
+    }
+
+    #[test]
+    fn a_calibre_content_server_root_is_not_a_catalog() {
+        serve_with(
+            |path| {
+                match path {
+                "/opds" => Some((
+                    200,
+                    r#"<feed xmlns="http://www.w3.org/2005/Atom"><title>calibre Library</title><entry><title>By Newest</title><id>calibre:navcatalog:4f</id><link href="/opds/navcatalog/4f?library_id=Calibre_Library"/></entry></feed>"#.to_string(),
+                )),
+                _ => None,
+            }
+            },
+            || {
+                let e = block(cw().books()).unwrap_err().to_string();
+                assert!(
+                    e.contains("does not serve a Calibre-Web OPDS catalog"),
+                    "{e}"
+                );
+            },
+        );
     }
 
     #[test]
