@@ -225,6 +225,7 @@ impl Cw {
         let mut req = self
             .http()
             .post(format!("{}/login", self.base_url()))
+            .follow_redirects(false)
             .form_urlencoded(&form);
         if let Some(c) = jar.header() {
             req = req.header("cookie", cookie_value(&c)?);
@@ -302,6 +303,9 @@ mod tests {
                     .map(|b| b.iter().map(|x| x.as_u64().unwrap() as u8).collect())
                     .unwrap_or_default();
                 let form = String::from_utf8(bytes).unwrap();
+                if method == "POST" && path == "/login" {
+                    assert_eq!(req["follow_redirects"], json!(false));
+                }
                 let (status, headers, body) = route(&method, &path, cookie.as_deref(), &form);
                 log.lock().unwrap().push((method, path, cookie, form));
                 Ok(
