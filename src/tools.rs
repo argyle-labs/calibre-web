@@ -73,6 +73,8 @@ pub struct CatalogPage {
 /// List one page of books with title, authors, series + index, formats,
 /// languages and publication date, read from the OPDS catalog
 /// (the "All" books feed advertised under `/opds/books`). Follow `next_offset` until it is null.
+/// Books whose OPDS entry has no series (Calibre-Web-Automated) take series and index from
+/// `/ajax/listbooks` over a web-UI session logged in with the endpoint's credentials.
 /// This is the owned-ebook inventory for ebook and audiobook parity.
 #[orca_tool(domain = "calibre-web", verb = "books.list", role = "read")]
 async fn calibre_web_books_list(args: ListArgs, _ctx: &ToolCtx) -> Result<BookPage> {
