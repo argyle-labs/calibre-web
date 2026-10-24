@@ -284,37 +284,40 @@ mod tests {
     ) -> Vec<Seen> {
         let seen = Arc::new(Mutex::new(Vec::new()));
         let log = seen.clone();
-        plugin_toolkit::capsink::with_cap_sink(
-            Box::new(move |_cap: &str, req: &str| {
-                let req: serde_json::Value = serde_json::from_str(req).unwrap();
-                let url = req["url"].as_str().unwrap();
-                let path = url[url.find("://").unwrap() + 3..]
-                    .split_once('/')
-                    .map_or("/".to_string(), |(_, p)| format!("/{p}"));
-                let method = req["method"].as_str().unwrap().to_string();
-                let cookie = req["headers"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .find(|h| h[0].as_str().unwrap().eq_ignore_ascii_case("cookie"))
-                    .map(|h| h[1].as_str().unwrap().to_string());
-                let bytes: Vec<u8> = req["body"]
-                    .as_array()
-                    .map(|b| b.iter().map(|x| x.as_u64().unwrap() as u8).collect())
-                    .unwrap_or_default();
-                let form = String::from_utf8(bytes).unwrap();
-                if method == "POST" && path == "/login" {
-                    assert_eq!(req["follow_redirects"], json!(false));
-                }
-                let (status, headers, body) = route(&method, &path, cookie.as_deref(), &form);
-                log.lock().unwrap().push((method, path, cookie, form));
-                Ok(
-                    json!({"status": status, "headers": headers, "body": body.into_bytes()})
-                        .to_string(),
-                )
-            }),
-            body,
-        );
+        let sink = || {
+            plugin_toolkit::capsink::with_cap_sink(
+                Box::new(move |_cap: &str, req: &str| {
+                    let req: serde_json::Value = serde_json::from_str(req).unwrap();
+                    let url = req["url"].as_str().unwrap();
+                    let path = url[url.find("://").unwrap() + 3..]
+                        .split_once('/')
+                        .map_or("/".to_string(), |(_, p)| format!("/{p}"));
+                    let method = req["method"].as_str().unwrap().to_string();
+                    let cookie = req["headers"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .find(|h| h[0].as_str().unwrap().eq_ignore_ascii_case("cookie"))
+                        .map(|h| h[1].as_str().unwrap().to_string());
+                    let bytes: Vec<u8> = req["body"]
+                        .as_array()
+                        .map(|b| b.iter().map(|x| x.as_u64().unwrap() as u8).collect())
+                        .unwrap_or_default();
+                    let form = String::from_utf8(bytes).unwrap();
+                    if method == "POST" && path == "/login" {
+                        assert_eq!(req["follow_redirects"], json!(false));
+                    }
+                    let (status, headers, body) = route(&method, &path, cookie.as_deref(), &form);
+                    log.lock().unwrap().push((method, path, cookie, form));
+                    Ok(
+                        json!({"status": status, "headers": headers, "body": body.into_bytes()})
+                            .to_string(),
+                    )
+                }),
+                body,
+            )
+        };
+        plugin_toolkit::capsink::with_core_caps(&[plugin_toolkit::abi::HTTP_NO_FOLLOW], sink);
         let out = seen.lock().unwrap().clone();
         out
     }
