@@ -17,11 +17,12 @@ name = "calibre-web"
 path = "src/main.rs"
 
 [dependencies]
-plugin-toolkit = { git = "https://github.com/argyle-labs/orca", branch = "main", package = "orca-plugin-toolkit", default-features = false, features = ["tools", "db", "delegated-http"] }
+plugin-toolkit = { version = ">=0.2.1-rc.47", registry = "gitea", package = "orca-plugin-toolkit", default-features = false, features = ["tools", "db", "delegated-http"] }
 base64 = "0.22"
 roxmltree = "0.20"
 
 [dev-dependencies]
+plugin-toolkit = { version = ">=0.2.1-rc.47", registry = "gitea", package = "orca-plugin-toolkit", default-features = false, features = ["testing"] }
 tokio = { version = "1", features = ["rt"] }
 
 [lints.clippy]
